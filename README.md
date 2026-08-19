@@ -98,6 +98,14 @@ pnpm build:client # tsdown 产出 lib/client.js（不清理 host lib）
 - host 路由与 provider 注册全部挂在 `ctx.effect` 下，卸载即清理
 - client 设置卡的轮询/测试请求随 fiber dispose 清理（AbortController）
 
+## 🐋 Ventus 系列插件
+
+| 插件 | 说明 | 仓库 |
+|---|---|---|
+| 🐳 dsh-ventus-whale | 蓝色大肥鱼 · DeepSeek 虎鲸 3D 桌宠 | [GitHub](https://github.com/mmzm0808/dsh-ventus-whale) |
+| 📊 dsh-deepseek-usage | DeepSeek API 用量监测（悬浮球 + 面板） | [GitHub](https://github.com/mmzm0808/dsh-deepseek-usage) |
+| 🔍 dsh-ventus-search | 多引擎搜索与正文抓取（Bing / 360 / Bilibili） | [GitHub](https://github.com/mmzm0808/dsh-ventus-search) |
+
 ## 📄 许可证
 
 MIT License · Copyright (c) 2026 Ventus
