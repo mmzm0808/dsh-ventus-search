@@ -1,19 +1,45 @@
-# dsh-ventus-search
+# 🔍 dsh-ventus-search
 
-Ventus 搜索插件：为 DSH 的 web 能力缝（ctx.web）注册两个 provider：
+**Ventus 搜索 · DeepSeek Harness 多引擎搜索与正文抓取插件** —— 注册进 `ctx.web` 的搜索 / 抓取双 provider：Bing、360、Bilibili 三引擎并发搜索，命中评分、URL 去重、跳转链接解码、整体超时兜底、LRU 缓存；正文抓取带广告域名黑名单、类 Readability 抽取与镜像回退。附 Ventus 系列设置卡：总开关、每引擎开关、健康状态与**一键测试搜索**。
 
-- **搜索 provider**（id `ventus-search`）：Bing / 360（so.com）/ Bilibili 三引擎并发抓取，评分、去重、单域名限额、跳转链接解码、整体超时兜底、LRU 缓存。
-- **抓取 provider**（id `ventus-fetch`）：URL 校验 + 广告/追踪域名黑名单 + 类 Readability 正文抽取 + 镜像域名回退。
+<p align="center">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.1.0-blueviolet">
+  <img alt="runtime" src="https://img.shields.io/badge/runtime-dsh%20web-4d6bfe">
+  <img alt="engines" src="https://img.shields.io/badge/engines-bing%20%7C%20360%20%7C%20bilibili-4d6bfe">
+</p>
 
-外加一张 Ventus 系列设置卡（`ventus.settings.item` slot）：总开关、每引擎启用开关与健康状态（圆点 + 上次成功/失败信息）、实时测试搜索（`POST /api/ventus-search/test`）。
+## ✨ 特性
 
-## 安装
+| 分类 | 说明 |
+|---|---|
+| 🔍 多引擎搜索 | Bing（中文/英文/新闻自动识别）、360（双入口冗余）、Bilibili 官方 API，按 `maxConcurrency` 并发调度 |
+| ⭐ 结果质量 | 标题命中 ×3 + 摘要命中 ×2 − 排名权重评分；URL 规范化去重；单域名限额；Bing/360 跳转包装解码 |
+| 🛡️ 绝不失败 | 单引擎失败隔离（不影响其他引擎）；备用查询重试；整体超时到点返回部分结果；`gracefulDegradation` 兜底返回空结果而非抛错 |
+| ⚡ 高效 | 查询级 LRU 缓存（TTL 300s）；429/5xx/超时自动重试；全程响应 AbortSignal |
+| 📄 正文抓取 | 广告/追踪域名黑名单（含子域）、类 Readability 正文抽取、镜像域名回退、体积上限 |
+| 🎛️ 设置卡 | Ventus 系列设置卡：总开关、**每引擎独立开关**、健康状态（状态点 + 上次成功/失败信息）、**测试搜索按钮**（真实搜索并展示结果） |
+| 🔐 安全 | 状态路由 loopback-only + no-store；状态文件原子写入（临时文件 + fsync + rename） |
 
-```bash
-dsh plugin --profile web add ./path/to/dsh-ventus-search
+## 🚀 安装
+
+### Git 安装
+
+```sh
+dsh plugin --profile web add github:mmzm0808/dsh-ventus-search
 ```
 
-或任意支持 bundle patch 的 profile。安装后重启目标 profile。插件通过 `cordis.patch.yml` 插入一行：
+### 本地开发安装
+
+```sh
+dsh plugin --profile web add "<本仓库本地绝对路径>"
+```
+
+- 仓库已提交完整 `lib/` 构建产物，安装**无需执行构建脚本**（pnpm ≥10 的 allowBuilds 门禁不影响本插件）
+- 安装后**重启 dsh**（新 bundle 层在启动时加载）
+- DSH 插件开发使用 **pnpm**；GitHub 分发不要求发布 npm
+
+安装后 profile 的 `cordis.patch.yml` 会插入一行：
 
 ```yaml
 - insert:
@@ -21,7 +47,15 @@ dsh plugin --profile web add ./path/to/dsh-ventus-search
       name: dsh-ventus-search
 ```
 
-## 配置（schemastery，全部有默认值）
+## 📖 使用
+
+1. **设置卡**：设置 → Ventus 插件 → **Ventus 搜索**
+2. **总开关**：关闭后搜索与抓取 provider 立即不可用（`available()` 返回 false）
+3. **引擎开关**：可单独启用/禁用 Bing / 360 / Bilibili（无需改配置）
+4. **测试搜索**：在输入框输入关键词（默认 "DeepSeek Harness 最新动态"），点「测试搜索」→ 展示耗时、来源数与结果列表（标题可点击、摘要、URL）
+5. **健康状态**：每引擎显示状态圆点（绿=正常 / 红=失败 / 灰=未测）+ 最近成功时间 / 失败原因
+
+## ⚙️ 配置（schemastery，全部有默认值）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -41,50 +75,29 @@ dsh plugin --profile web add ./path/to/dsh-ventus-search
 | cache.enabled | true | 查询级 LRU 缓存（容量 100，TTL 300s） |
 | fetch.enabled | true | 抓取 provider 开关 |
 | fetch.blockedDomains | 见默认 | 广告/追踪域名黑名单（doubleclick.net 等） |
-| fetch.mirrorDomains | {} | 主站失败时按 host 尝试的镜像域名表，如 {"example.com": ["mirror.example.com"]} |
-
-## 状态路由
-
-- `GET /api/ventus-search/state` → `{ enabled, engines, updatedAt }`（`Cache-Control: no-store`）
-- `PATCH /api/ventus-search/state`，body `{ "enabled"?: boolean, "engines"?: { "bing"?: boolean, "so360"?: boolean, "bilibili"?: boolean } }`，至少一个字段，逐个应用后返回新状态
-- `POST /api/ventus-search/test`，body `{ "query": string }`（必填、≤200 字符）→ 调用搜索 provider（maxResults=5），返回 `{ ok, durationMs, sources, engines }`；provider 抛错时返回 `{ ok: false, error, engines }`（HTTP 200）
-
-路由仅接受回环来源（127.0.0.1/localhost + 同源）。
-
-### 状态文件格式
-
-`engines` 中每项是对象（旧版扁平字符串 `"ok"|"fail"|"untested"` 会自动迁移为对象，enabled=true）：
-
-```json
-{
-  "enabled": true,
-  "engines": {
-    "bing": { "enabled": true, "health": "ok", "lastOkAt": "2026-08-19T12:00:00.000Z", "lastError": null },
-    "so360": { "enabled": true, "health": "untested", "lastOkAt": null, "lastError": null },
-    "bilibili": { "enabled": false, "health": "fail", "lastOkAt": null, "lastError": "HTTP 412 ..." }
-  },
-  "updatedAt": "2026-08-19T12:00:00.000Z"
-}
-```
+| fetch.mirrorDomains | {} | 主站失败时按 host 尝试的镜像域名表 |
 
 引擎实际启用 = 配置 `engines.<id>`（硬默认）AND 状态文件 `engines.<id>.enabled`（运行时覆盖）。
 
-## 实现要点
+## 🗂️ 数据与安全
 
-- 引擎抓取：fetch + AbortSignal（外部 signal 与内部超时合并），桌面 UA，正则解析 HTML/JSON，实体反转义。
-- 评分 = 标题命中词数 ×3 + 摘要命中词数 ×2 − 排名位置权重；URL 规范化去重（小写 host、去 utm_*/spm/from/search 等 tracking 参数），Bing/360 跳转包装 URL（a1%3a%2f%2f、/ck/a?...u=）解码后再参与去重与展示。
-- 兜底：任一引擎有结果即返回；整体超时返回部分结果；gracefulDegradation 关闭且全失败时抛 WEB_PROVIDER_ERROR。
-- 抓取：http/https 校验（否则 WEB_INVALID_URL）、黑名单 host 或子域命中抛 WEB_FETCH_BLOCKED、非 2xx 返回状态码 + 空 body、正文超 200KB 截断并置 truncated。
-- 每个引擎的成功/失败实时写回状态文件（health=ok/fail/untested，ok 刷新 lastOkAt，fail 记录截断 200 字符的 lastError）。
+- 状态文件：`~/.dsh/plugins/ventus-search/state.json`（原子写入 + fsync）；引擎状态含 `enabled / health / lastOkAt / lastError`，旧版扁平字符串格式自动迁移
+- API（**loopback-only**，仅本机可访问，`Cache-Control: no-store`）：
+  - `GET /api/ventus-search/state` — 当前状态
+  - `PATCH /api/ventus-search/state` — body `{ "enabled"?: boolean, "engines"?: { "bing"?: boolean, "so360"?: boolean, "bilibili"?: boolean } }`
+  - `POST /api/ventus-search/test` — body `{ "query": string }`（≤200 字符）→ 真实搜索并返回 `{ ok, durationMs, sources, engines }`
 
-## 开发
+## 🛠️ 开发
 
-```bash
+```sh
 pnpm typecheck    # tsc --noEmit（需要先按 scripts/build.sh 建 node_modules junction）
 pnpm build        # scripts/build.sh：link junction + tsc 编译 host
 pnpm build:client # tsdown 产出 lib/client.js（不清理 host lib）
 ```
 
-## 生命周期
+- host 路由与 provider 注册全部挂在 `ctx.effect` 下，卸载即清理
+- client 设置卡的轮询/测试请求随 fiber dispose 清理（AbortController）
 
-host 路由与 provider 注册全部挂在 ctx.effect 下，卸载即清理；client 设置卡的轮询定时器与监听随 fiber dispose 清理。
+## 📄 许可证
+
+MIT License · Copyright (c) 2026 Ventus
