@@ -1,6 +1,8 @@
 /**
- * Durable plugin state for dsh-ventus-search: master switch + per-engine health,
- * persisted as human-readable JSON with an atomic same-directory replace.
+ * Durable plugin state for dsh-ventus-search: master switch + per-engine
+ * enabled/health/lastOkAt/lastError, persisted as human-readable JSON with an
+ * atomic same-directory replace. Old flat-string engine health values are
+ * migrated to the object form on load.
  * @module dsh-ventus-search/state
  */
 
@@ -19,14 +21,26 @@ import { dirname } from 'node:path'
 /** Health of one search engine as reported by the last search pass. */
 export type EngineHealth = 'ok' | 'fail' | 'untested'
 
-/** Per-engine health map kept in the state file. */
-export interface EngineHealthMap {
-  bing: EngineHealth
-  so360: EngineHealth
-  bilibili: EngineHealth
+/** Per-engine state: config is the hard default, this file is the runtime override. */
+export interface EngineState {
+  /** Runtime enable switch (PATCH engines.{id}); config AND this must be true. */
+  enabled: boolean
+  /** Last reported health: ok / fail / untested. */
+  health: EngineHealth
+  /** ISO timestamp of the last successful engine run, or null. */
+  lastOkAt: string | null
+  /** Truncated error message of the last failed run, or null. */
+  lastError: string | null
 }
 
-/** Whole plugin state: master switch, engine health, and last write time. */
+/** Per-engine state map kept in the state file. */
+export interface EngineHealthMap {
+  bing: EngineState
+  so360: EngineState
+  bilibili: EngineState
+}
+
+/** Whole plugin state: master switch, engines, and last write time. */
 export interface VentusState {
   enabled: boolean
   engines: EngineHealthMap
@@ -36,17 +50,41 @@ export interface VentusState {
 /** Engine ids written back from the search provider. */
 export type EngineId = 'bing' | 'so360' | 'bilibili'
 
-/** Fresh default state (all engines untested). */
+/** Fresh per-engine state. */
+export function defaultEngineState(enabled = true): EngineState {
+  return { enabled, health: 'untested', lastOkAt: null, lastError: null }
+}
+
+/** Fresh default state (all engines enabled and untested). */
 export function defaultState(enabled = true): VentusState {
   return {
     enabled,
-    engines: { bing: 'untested', so360: 'untested', bilibili: 'untested' },
+    engines: {
+      bing: defaultEngineState(),
+      so360: defaultEngineState(),
+      bilibili: defaultEngineState(),
+    },
     updatedAt: new Date().toISOString(),
   }
 }
 
 function isHealth(value: unknown): value is EngineHealth {
   return value === 'ok' || value === 'fail' || value === 'untested'
+}
+
+/** Tolerant parse of one engine entry: old flat string -> new object (enabled=true). */
+function parseEngineState(value: unknown, fallback: EngineState): EngineState {
+  if (typeof value === 'string' && isHealth(value)) {
+    return { enabled: true, health: value, lastOkAt: null, lastError: null }
+  }
+  if (typeof value !== 'object' || value === null) return { ...fallback }
+  const raw = value as Partial<EngineState>
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
+    health: isHealth(raw.health) ? raw.health : fallback.health,
+    lastOkAt: typeof raw.lastOkAt === 'string' ? raw.lastOkAt : fallback.lastOkAt,
+    lastError: typeof raw.lastError === 'string' ? raw.lastError : fallback.lastError,
+  }
 }
 
 /** Tolerant parse of an on-disk state file; unknown/malformed fields fall back to defaults. */
@@ -59,9 +97,9 @@ function parseState(raw: string, fallbackEnabled: boolean): VentusState {
     return {
       enabled,
       engines: {
-        bing: isHealth(engines?.bing) ? engines.bing : fallback.engines.bing,
-        so360: isHealth(engines?.so360) ? engines.so360 : fallback.engines.so360,
-        bilibili: isHealth(engines?.bilibili) ? engines.bilibili : fallback.engines.bilibili,
+        bing: parseEngineState(engines?.bing, fallback.engines.bing),
+        so360: parseEngineState(engines?.so360, fallback.engines.so360),
+        bilibili: parseEngineState(engines?.bilibili, fallback.engines.bilibili),
       },
       updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : fallback.updatedAt,
     }
@@ -98,7 +136,11 @@ export class StateStore {
   get(): VentusState {
     return {
       enabled: this.state.enabled,
-      engines: { ...this.state.engines },
+      engines: {
+        bing: { ...this.state.engines.bing },
+        so360: { ...this.state.engines.so360 },
+        bilibili: { ...this.state.engines.bilibili },
+      },
       updatedAt: this.state.updatedAt,
     }
   }
@@ -110,11 +152,34 @@ export class StateStore {
     return this.get()
   }
 
-  /** Record one engine's health and persist. */
-  setEngineHealth(engine: EngineId, health: EngineHealth): VentusState {
+  /** Flip one engine's runtime enable switch and persist. */
+  setEngineEnabled(engine: EngineId, enabled: boolean): VentusState {
     this.state = {
       ...this.state,
-      engines: { ...this.state.engines, [engine]: health },
+      engines: { ...this.state.engines, [engine]: { ...this.state.engines[engine], enabled } },
+      updatedAt: new Date().toISOString(),
+    }
+    this.persist()
+    return this.get()
+  }
+
+  /**
+   * Record one engine's health and persist. A success refreshes lastOkAt and
+   * clears lastError; a failure stores the (caller-truncated) error message.
+   */
+  setEngineHealth(engine: EngineId, health: EngineHealth, lastError?: string | null): VentusState {
+    const current = this.state.engines[engine]
+    this.state = {
+      ...this.state,
+      engines: {
+        ...this.state.engines,
+        [engine]: {
+          ...current,
+          health,
+          lastOkAt: health === 'ok' ? new Date().toISOString() : current.lastOkAt,
+          lastError: health === 'fail' ? (lastError ?? null) : null,
+        },
+      },
       updatedAt: new Date().toISOString(),
     }
     this.persist()

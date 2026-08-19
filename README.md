@@ -5,7 +5,7 @@ Ventus 搜索插件：为 DSH 的 web 能力缝（ctx.web）注册两个 provide
 - **搜索 provider**（id `ventus-search`）：Bing / 360（so.com）/ Bilibili 三引擎并发抓取，评分、去重、单域名限额、跳转链接解码、整体超时兜底、LRU 缓存。
 - **抓取 provider**（id `ventus-fetch`）：URL 校验 + 广告/追踪域名黑名单 + 类 Readability 正文抽取 + 镜像域名回退。
 
-外加一张 Ventus 系列设置卡（`ventus.settings.item` slot）：总开关（PATCH 状态路由）与三引擎健康状态轮询。
+外加一张 Ventus 系列设置卡（`ventus.settings.item` slot）：总开关、每引擎启用开关与健康状态（圆点 + 上次成功/失败信息）、实时测试搜索（`POST /api/ventus-search/test`）。
 
 ## 安装
 
@@ -45,10 +45,29 @@ dsh plugin --profile web add ./path/to/dsh-ventus-search
 
 ## 状态路由
 
-- `GET /api/ventus-search/state` → `{ enabled, engines: { bing, so360, bilibili }, updatedAt }`（`Cache-Control: no-store`）
-- `PATCH /api/ventus-search/state`，body `{ "enabled": boolean }` → 写状态文件并返回新状态
+- `GET /api/ventus-search/state` → `{ enabled, engines, updatedAt }`（`Cache-Control: no-store`）
+- `PATCH /api/ventus-search/state`，body `{ "enabled"?: boolean, "engines"?: { "bing"?: boolean, "so360"?: boolean, "bilibili"?: boolean } }`，至少一个字段，逐个应用后返回新状态
+- `POST /api/ventus-search/test`，body `{ "query": string }`（必填、≤200 字符）→ 调用搜索 provider（maxResults=5），返回 `{ ok, durationMs, sources, engines }`；provider 抛错时返回 `{ ok: false, error, engines }`（HTTP 200）
 
 路由仅接受回环来源（127.0.0.1/localhost + 同源）。
+
+### 状态文件格式
+
+`engines` 中每项是对象（旧版扁平字符串 `"ok"|"fail"|"untested"` 会自动迁移为对象，enabled=true）：
+
+```json
+{
+  "enabled": true,
+  "engines": {
+    "bing": { "enabled": true, "health": "ok", "lastOkAt": "2026-08-19T12:00:00.000Z", "lastError": null },
+    "so360": { "enabled": true, "health": "untested", "lastOkAt": null, "lastError": null },
+    "bilibili": { "enabled": false, "health": "fail", "lastOkAt": null, "lastError": "HTTP 412 ..." }
+  },
+  "updatedAt": "2026-08-19T12:00:00.000Z"
+}
+```
+
+引擎实际启用 = 配置 `engines.<id>`（硬默认）AND 状态文件 `engines.<id>.enabled`（运行时覆盖）。
 
 ## 实现要点
 
@@ -56,7 +75,7 @@ dsh plugin --profile web add ./path/to/dsh-ventus-search
 - 评分 = 标题命中词数 ×3 + 摘要命中词数 ×2 − 排名位置权重；URL 规范化去重（小写 host、去 utm_*/spm/from/search 等 tracking 参数），Bing/360 跳转包装 URL（a1%3a%2f%2f、/ck/a?...u=）解码后再参与去重与展示。
 - 兜底：任一引擎有结果即返回；整体超时返回部分结果；gracefulDegradation 关闭且全失败时抛 WEB_PROVIDER_ERROR。
 - 抓取：http/https 校验（否则 WEB_INVALID_URL）、黑名单 host 或子域命中抛 WEB_FETCH_BLOCKED、非 2xx 返回状态码 + 空 body、正文超 200KB 截断并置 truncated。
-- 每个引擎的成功/失败实时写回状态文件（ok/fail/untested）。
+- 每个引擎的成功/失败实时写回状态文件（health=ok/fail/untested，ok 刷新 lastOkAt，fail 记录截断 200 字符的 lastError）。
 
 ## 开发
 

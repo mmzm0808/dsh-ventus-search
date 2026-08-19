@@ -1,8 +1,8 @@
 /**
- * dsh-ventus-search — browser half. A Ventus-series settings card with the
- * master switch (PATCH /api/ventus-search/state) and per-engine health polling
- * (GET /api/ventus-search/state). Poll timers and listeners are cleaned up with
- * the client fiber.
+ * dsh-ventus-search — browser half. Ventus-series settings card: master switch
+ * (PATCH /api/ventus-search/state), per-engine enable toggles + health status
+ * with polling, and a live test search (POST /api/ventus-search/test). All
+ * fetches/timers/listeners are cleaned up with the client fiber.
  * @module dsh-ventus-search/client
  */
 /** Minimal slots service face used by this plugin (avoids runtime imports). */

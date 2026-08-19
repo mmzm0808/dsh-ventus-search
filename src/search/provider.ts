@@ -90,6 +90,11 @@ async function runPool<T>(items: readonly T[], worker: (item: T) => Promise<void
   await Promise.all(runners)
 }
 
+/** Cap an error message at max characters for the persisted state. */
+function truncateMessage(message: string, max = 200): string {
+  return message.length > max ? message.slice(0, max) + '…' : message
+}
+
 /** Strip quotes and filler words to produce retryable fallback queries. */
 function fallbackQueries(query: string): string[] {
   const variants: string[] = []
@@ -142,10 +147,18 @@ export class VentusSearchProvider implements WebSearchProvider {
   /** Execute all engine passes under one overall deadline and assemble results. */
   private async runSearch(query: string, externalSignal?: AbortSignal): Promise<WebSearchResult> {
     const enabled: Array<{ id: EngineId; run: (q: string, signal: AbortSignal) => Promise<RawSource[]> }> = []
+    // Config is the hard default; the persisted state file overrides it at runtime.
     const engines = this.options.engines
-    if (engines.bing) enabled.push({ id: 'bing', run: (q, s) => ENGINE_ADAPTERS.bing(q, this.engineOptions(q, s)) })
-    if (engines.so360) enabled.push({ id: 'so360', run: (q, s) => ENGINE_ADAPTERS.so360(q, this.engineOptions(q, s)) })
-    if (engines.bilibili) enabled.push({ id: 'bilibili', run: (q, s) => ENGINE_ADAPTERS.bilibili(q, this.engineOptions(q, s)) })
+    const engineStates = this.state.get().engines
+    if (engines.bing && engineStates.bing.enabled) {
+      enabled.push({ id: 'bing', run: (q, s) => ENGINE_ADAPTERS.bing(q, this.engineOptions(q, s)) })
+    }
+    if (engines.so360 && engineStates.so360.enabled) {
+      enabled.push({ id: 'so360', run: (q, s) => ENGINE_ADAPTERS.so360(q, this.engineOptions(q, s)) })
+    }
+    if (engines.bilibili && engineStates.bilibili.enabled) {
+      enabled.push({ id: 'bilibili', run: (q, s) => ENGINE_ADAPTERS.bilibili(q, this.engineOptions(q, s)) })
+    }
 
     const deadline = new AbortController()
     let externalAborted = false
@@ -222,6 +235,7 @@ export class VentusSearchProvider implements WebSearchProvider {
       enabled,
       async engine => {
         let ok = false
+        let lastError: string | undefined
         for (let attempt = 0; attempt <= this.options.retryCount; attempt++) {
           if (deadline.aborted) break
           try {
@@ -232,13 +246,14 @@ export class VentusSearchProvider implements WebSearchProvider {
             break
           } catch (error) {
             if (deadline.aborted) break
+            lastError = truncateMessage(error instanceof Error ? error.message : String(error), 200)
             const retryable = error instanceof RetryableError
             if (!retryable) break
             if (attempt >= this.options.retryCount) break
             await new Promise<void>(resolve => setTimeout(resolve, 250 * (attempt + 1)))
           }
         }
-        if (!ok && !deadline.aborted) this.state.setEngineHealth(engine.id, 'fail')
+        if (!ok && !deadline.aborted) this.state.setEngineHealth(engine.id, 'fail', lastError)
       },
       Math.max(1, this.options.maxConcurrency),
     )

@@ -15,6 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import z from 'schemastery'
 import { StateStore } from './state.js'
+import type { EngineId } from './state.js'
 import { VentusSearchProvider } from './search/provider.js'
 import type { VentusSearchOptions } from './search/provider.js'
 import { VentusFetchProvider } from './fetch/provider.js'
@@ -183,6 +184,10 @@ export function apply(ctx: Context, config: Config): void {
   const state = new StateStore(expandHome(config.stateFilePath))
   state.load(config.enabled)
 
+  // Providers are created before the routes so the test route can call search().
+  const searchProvider = new VentusSearchProvider(searchOptions(config), state)
+  const fetchProvider = new VentusFetchProvider(fetchOptions(config), () => state.get().enabled)
+
   const stateRoute: WebRoute = {
     kind: 'exact',
     path: '/api/ventus-search/state',
@@ -200,25 +205,96 @@ export function apply(ctx: Context, config: Config): void {
         return
       }
       try {
-        const body = await readJsonBody(req)
-        if (typeof body !== 'object' || body === null || typeof (body as { enabled?: unknown }).enabled !== 'boolean') {
-          writeJson(res, 400, { error: 'body must be { "enabled": boolean }' })
+        const body = await readJsonBody(req) as Record<string, unknown> | null
+        if (typeof body !== 'object' || body === null) {
+          writeJson(res, 400, { error: 'body must be a JSON object' })
           return
         }
-        writeJson(res, 200, state.setEnabled((body as { enabled: boolean }).enabled))
+        const enabledPatch = typeof body.enabled === 'boolean' ? (body.enabled as boolean) : undefined
+        const enginesRaw = body.engines
+        const hasEnginePatch = typeof enginesRaw === 'object' && enginesRaw !== null
+          && Object.keys(enginesRaw as object).length > 0
+        const enginesValid = hasEnginePatch && Object.entries(enginesRaw as Record<string, unknown>).every(
+          ([id, value]) => (id === 'bing' || id === 'so360' || id === 'bilibili') && typeof value === 'boolean',
+        )
+        if (enabledPatch === undefined && !hasEnginePatch) {
+          writeJson(res, 400, { error: 'body must include enabled and/or engines' })
+          return
+        }
+        if (enginesRaw !== undefined && !enginesValid) {
+          writeJson(res, 400, { error: 'engines must be { bing?, so360?, bilibili? } with boolean values' })
+          return
+        }
+        let next = state.get()
+        if (enabledPatch !== undefined) next = state.setEnabled(enabledPatch)
+        if (hasEnginePatch) {
+          for (const [id, value] of Object.entries(enginesRaw as Record<string, unknown>)) {
+            next = state.setEngineEnabled(id as EngineId, value as boolean)
+          }
+        }
+        writeJson(res, 200, next)
       } catch (error) {
         writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
       }
     },
   }
 
-  ctx.effect(() => {
-    const disposeRoute = ctx.webServer.register(stateRoute)
-    return () => disposeRoute()
-  }, 'ventus-search: state route')
+  const testRoute: WebRoute = {
+    kind: 'exact',
+    path: '/api/ventus-search/test',
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (!isLoopbackRequest(req)) {
+        writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        return
+      }
+      if (req.method !== 'POST') {
+        writeJson(res, 405, { error: 'method not allowed (expected POST)' })
+        return
+      }
+      let body: Record<string, unknown>
+      try {
+        const parsed = await readJsonBody(req)
+        if (typeof parsed !== 'object' || parsed === null) {
+          throw new Error('body must be a JSON object')
+        }
+        body = parsed as Record<string, unknown>
+      } catch (error) {
+        writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        return
+      }
+      const query = typeof body.query === 'string' ? body.query : undefined
+      if (query === undefined || query.trim().length === 0 || query.length > 200) {
+        writeJson(res, 400, { error: 'query is required, non-empty, and at most 200 characters' })
+        return
+      }
+      const started = Date.now()
+      try {
+        const result = await searchProvider.search({ query, maxResults: 5 })
+        writeJson(res, 200, {
+          ok: true,
+          durationMs: Date.now() - started,
+          sources: result.sources,
+          engines: state.get().engines,
+        })
+      } catch (error) {
+        writeJson(res, 200, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          engines: state.get().engines,
+        })
+      }
+    },
+  }
 
-  const searchProvider = new VentusSearchProvider(searchOptions(config), state)
-  const fetchProvider = new VentusFetchProvider(fetchOptions(config), () => state.get().enabled)
+  ctx.effect(() => {
+    const disposeState = ctx.webServer.register(stateRoute)
+    const disposeTest = ctx.webServer.register(testRoute)
+    return () => {
+      disposeState()
+      disposeTest()
+    }
+  }, 'ventus-search: routes')
+
   ctx.effect(() => {
     const disposeSearch = ctx.web.registerSearchProvider(searchProvider)
     const disposeFetch = ctx.web.registerFetchProvider(fetchProvider)
