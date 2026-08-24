@@ -1,4 +1,7 @@
 # 🔍 dsh-ventus-search
+> 🧩 **一键整合安装：[dsh-ventus-plugins](https://github.com/mmzm0808/dsh-ventus-plugins)** —— 本插件已并入整合包，也可按本仓库方式单独安装。
+
+
 
 **Ventus 搜索 · DeepSeek Harness 多引擎搜索与正文抓取插件** —— 注册进 `ctx.web` 的搜索 / 抓取双 provider：Bing、360、Bilibili 三引擎并发搜索，命中评分、URL 去重、跳转链接解码、整体超时兜底、LRU 缓存；正文抓取带广告域名黑名单、类 Readability 抽取与镜像回退。附 Ventus 系列设置卡：总开关、每引擎开关、健康状态与**一键测试搜索**。
 
