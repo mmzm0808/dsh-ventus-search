@@ -264,7 +264,7 @@ const primaryButtonStyle: CSS = {
   borderRadius: '8px',
   border: '1px solid var(--dsw-alias-state-business-primary)',
   background: 'var(--dsw-alias-state-business-primary)',
-  color: '#fff',
+  color: '#101110',
   fontSize: '13px',
   fontWeight: '600',
   cursor: 'pointer',
